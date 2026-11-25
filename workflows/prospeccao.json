@@ -1,0 +1,170 @@
+{
+  "name": "Prospecção B2B - Sem Site",
+  "nodes": [
+    {
+      "parameters": { "path": "prospectar", "responseMode": "lastNode", "options": {} },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "prospectar"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "propertyName": "cache",
+        "key": "=cache:busca:{{ $json.query.cidade.toLowerCase() }}",
+        "options": {}
+      },
+      "name": "Redis GET Cache",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "credentials": { "redis": { "name": "Upstash Redis" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            { "leftValue": "={{ $json.cache }}", "operator": { "type": "string", "operation": "empty" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Cidade fora do cache?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://overpass-api.de/api/interpreter",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "=[out:json][timeout:120];area[\"name\"=\"{{ $('Webhook').item.json.query.cidade }}\"][\"boundary\"=\"administrative\"]->.a;(nwr[\"shop\"][!\"website\"][!\"contact:website\"](area.a);nwr[\"amenity\"~\"restaurant|cafe|bar|fast_food|dentist|clinic|pharmacy\"][!\"website\"][!\"contact:website\"](area.a);nwr[\"craft\"][!\"website\"][!\"contact:website\"](area.a););out center tags;"
+            }
+          ]
+        },
+        "options": { "timeout": 180000 }
+      },
+      "name": "Overpass API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 200]
+    },
+    {
+      "parameters": { "fieldToSplitOut": "elements", "options": {} },
+      "name": "Split Out",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            { "leftValue": "={{ $json.tags.name }}", "operator": { "type": "string", "operation": "notEmpty" } },
+            { "leftValue": "={{ $json.tags.phone || $json.tags['contact:phone'] }}", "operator": { "type": "string", "operation": "notEmpty" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Filtro Nome + Telefone",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "command": "=SISMEMBER leads:processados {{ $json.id }}"
+      },
+      "name": "Redis SISMEMBER",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1320, 200],
+      "credentials": { "redis": { "name": "Upstash Redis" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cidade = $('Webhook').first().json.query.cidade;\nconst originais = $('Filtro Nome + Telefone').all();\nconst checks = $input.all();\nconst out = [];\n\nfor (let i = 0; i < originais.length; i++) {\n  const jaExiste = Number(Object.values(checks[i]?.json || {})[0] || 0) === 1;\n  if (jaExiste) continue;\n  const el = originais[i].json;\n  const t = el.tags || {};\n  const bruto = String(t.phone || t['contact:phone']).split(';')[0];\n  let num = bruto.replace(/\\D/g, '');\n  num = num.replace(/^0+/, '');\n  if (!num.startsWith('55')) num = '55' + num;\n  if (num.length < 12 || num.length > 13) continue;\n  const isMobile = num.length === 13;\n  const endereco = [t['addr:street'], t['addr:housenumber'], t['addr:suburb']].filter(Boolean).join(', ');\n  out.push({ json: {\n    osm_id: el.id,\n    nome: t.name,\n    categoria: t.shop || t.amenity || t.craft || null,\n    cidade,\n    telefone: num,\n    whatsapp_link: isMobile ? `https://wa.me/${num}` : null,\n    is_mobile: isMobile,\n    endereco: endereco || null\n  }});\n}\nreturn out;"
+      },
+      "name": "Formatar Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads_sem_site (osm_id, nome, categoria, cidade, telefone, whatsapp_link, is_mobile, endereco) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (osm_id) DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ [$json.osm_id, $json.nome, $json.categoria, $json.cidade, $json.telefone, $json.whatsapp_link, $json.is_mobile, $json.endereco] }}"
+        }
+      },
+      "name": "Postgres INSERT",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1760, 200],
+      "credentials": { "postgres": { "name": "Neon Postgres" } }
+    },
+    {
+      "parameters": {
+        "command": "=SADD leads:processados {{ $('Formatar Leads').item.json.osm_id }}"
+      },
+      "name": "Redis SADD",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1980, 200],
+      "credentials": { "redis": { "name": "Upstash Redis" } }
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=cache:busca:{{ $('Webhook').first().json.query.cidade.toLowerCase() }}",
+        "value": "={{ $now.toISO() }}",
+        "expire": true,
+        "ttl": 604800
+      },
+      "name": "Redis SETEX Cidade",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2200, 200],
+      "executeOnce": true,
+      "credentials": { "redis": { "name": "Upstash Redis" } }
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [ { "name": "status", "value": "cache_hit", "type": "string" } ] },
+        "options": {}
+      },
+      "name": "Cache Hit",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [660, 420]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Redis GET Cache", "type": "main", "index": 0 }]] },
+    "Redis GET Cache": { "main": [[{ "node": "Cidade fora do cache?", "type": "main", "index": 0 }]] },
+    "Cidade fora do cache?": { "main": [
+      [{ "node": "Overpass API", "type": "main", "index": 0 }],
+      [{ "node": "Cache Hit", "type": "main", "index": 0 }]
+    ] },
+    "Overpass API": { "main": [[{ "node": "Split Out", "type": "main", "index": 0 }]] },
+    "Split Out": { "main": [[{ "node": "Filtro Nome + Telefone", "type": "main", "index": 0 }]] },
+    "Filtro Nome + Telefone": { "main": [[{ "node": "Redis SISMEMBER", "type": "main", "index": 0 }]] },
+    "Redis SISMEMBER": { "main": [[{ "node": "Formatar Leads", "type": "main", "index": 0 }]] },
+    "Formatar Leads": { "main": [[{ "node": "Postgres INSERT", "type": "main", "index": 0 }]] },
+    "Postgres INSERT": { "main": [[{ "node": "Redis SADD", "type": "main", "index": 0 }]] },
+    "Redis SADD": { "main": [[{ "node": "Redis SETEX Cidade", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Sao_Paulo" }
+}
