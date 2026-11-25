@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS leads_sem_site (
     id SERIAL PRIMARY KEY,
-    osm_id BIGINT UNIQUE NOT NULL,
+    osm_id VARCHAR(32) UNIQUE NOT NULL, -- ex: node/123, way/456
     nome VARCHAR(255) NOT NULL,
     categoria VARCHAR(100),
     cidade VARCHAR(120) NOT NULL,

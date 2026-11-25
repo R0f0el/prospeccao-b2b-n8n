@@ -26,3 +26,7 @@ services:
         sync: false
       - key: N8N_HOST
         sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

@@ -4,7 +4,8 @@ ENV GENERIC_TIMEZONE=America/Sao_Paulo \
     TZ=America/Sao_Paulo \
     N8N_PROTOCOL=https \
     N8N_DIAGNOSTICS_ENABLED=false \
-    N8N_RUNNERS_ENABLED=true
+    N8N_RUNNERS_ENABLED=true \
+    N8N_BLOCK_ENV_ACCESS_IN_NODE=false
 
 EXPOSE 5678
 
